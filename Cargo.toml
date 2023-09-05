@@ -1,0 +1,19 @@
+[package]
+name = "agoradesk-trade-bot"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+reqwest = { version = "0.11", features = ["json", "blocking"] }
+tokio = { version = "1", features = ["full"] }
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+bdk = {version="^0.27.1", default-features = false, features = ["all-keys", "key-value-db", "rpc"]}
+dirs-next = "2.0"
+slip132 = "^0.10.0"
+electrum-client = "^0.18.0"
+bitcoin = "^0.30.1"
+clap = { version = "4.0", features = ["derive"] }
+colored = "^2.0"
