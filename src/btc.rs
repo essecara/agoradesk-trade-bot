@@ -10,6 +10,7 @@ use bdk::wallet::{AddressIndex, AddressInfo};
 use slip132::FromSlip132;
 use electrum_client::{Client, ElectrumApi};
 use std::str::FromStr;
+use std::io::{Error, ErrorKind};
 
 
 /*
@@ -31,17 +32,16 @@ pub struct Btc {
 
 impl Btc {
 
-    pub fn get_address(&self, index: Option<u32>) -> AddressInfo {
+    pub fn get_address(&self, index: Option<u32>) -> Result<AddressInfo, String> {
 
         let i = index.unwrap_or(0);
         let address_index: AddressIndex = if i == 0 { AddressIndex::New } else { AddressIndex::Peek(i) };
         let address = self.wallet.get_address(address_index).unwrap();
 
-        return address;
+        return Ok(address);
     }
 
-    // @TODO .. handle errors .. if address wrong? ... I'm generating it so shouldnt be ? 
-    pub fn get_balance(&self, address: &String) -> u64 {
+    pub fn get_balance(&self, address: &String) -> Result<u64, String> {
         
         // @TODO for sure some repair required here
         let network: bitcoin::Network = if self.network == Network::Bitcoin {
@@ -65,13 +65,21 @@ impl Btc {
 
         // 
 
-        let latest_tx_hash = client
+        let latest_tx_option = client
             .script_get_history(spk.as_script())
-            .unwrap()
-            .last()
-            //...get(0)
-            .unwrap()
-            .tx_hash;
+            .unwrap();
+            //.last();
+            //.unwrap().
+            //.tx_hash;
+
+ 
+        let latest_tx_hash = match latest_tx_option.last() {
+            Some(val) => val.tx_hash.clone(),
+            None => {
+                return Err("Couldn't fetch balance xx".to_owned());
+            }
+        };
+        
 
         let tx = client
             .transaction_get(&latest_tx_hash)
@@ -89,45 +97,33 @@ impl Btc {
             .unwrap()
             .height;    
 
-
-
         // has balance AND has confirmations ?
-
-
-        println!("{} confirmations\n{} balance\n Height {}\n tx height {}",
-             current_height - usize::try_from(tx_height).unwrap(),
-             balance.confirmed,
-             current_height,
-             tx_height
-
-        );
-
-
         if (current_height - usize::try_from(tx_height).unwrap() > 3) && balance.confirmed > 0 {
-            return balance.confirmed;
+            return Ok(balance.confirmed);
         } 
-
-        let z: u64 = 0;
-        return z;
-
+        
+        Err("Couldn't fetch balance".to_owned())
     }
 
     // expect je string bitcoin
     // balance je u64 satoshi
-    pub fn assert_eq(&self, address: &String, expect: f64) -> bool {
+    pub fn assert_eq(&self, address: &String, expect: f64) -> Result<bool, String> {
 
-        let balance: u64 = self.get_balance(address);
+        let balance: u64 = self.get_balance(address)?;
+
+
 
         let sat: f64 = 100000000.00;
         let expect_sats = expect * sat;
 
+        println!("balance: {}\n expect sats: {}", balance, expect * sat);
         //println!("fn: assert_eq => {} == {}", balance, expect_sats as u64);
 
         if balance >= expect_sats as u64{
-            return true;
+            return Ok(true);
         }
 
-        false
+        Ok(false)
     }
 
 }
@@ -143,7 +139,7 @@ impl Req for Btc {
     }
 }
 
-pub fn get_wallet(mpk: String, index: u32, testnet: Option<bool>, server: String) -> Btc {
+pub fn get_wallet(mpk: String, index: u32, testnet: Option<bool>, server: String) -> Result<Btc, String> {
 
     let network: Network;
     
@@ -176,6 +172,6 @@ pub fn get_wallet(mpk: String, index: u32, testnet: Option<bool>, server: String
         }
     }
 
-    Btc { wallet: wallet, mpk: mpk, network: network , electrum: server }
+    Ok(Btc { wallet: wallet, mpk: mpk, network: network , electrum: server })
     
 }
