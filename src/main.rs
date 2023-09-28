@@ -1,45 +1,3 @@
-
-/* progam and PoC notes
-
-    app notes:
-        * only mainnet and testnet supported, use of two crates bdk & bitcoin for this  !
-
-    now we can:
-        * read open trades
-        * save open trades and update data about them
-        * generate an address
-        * send a message
-        * check address balance on address provided
-        * load api key from file
-        * save index of used address
-    
-        * filter open trades based on AD ID - bot pickus up only those offers that are bot tradable ...  
-    
-        * minimum confirmation count 
-
-        * display actual status in console
-            - new trade added
-            - general status of open trades
-            - closed trade
-            - trade cancelled
-
-            * colors:
-                BrightWhite <- new trade opened
-                Red <- trade cancelled
-                Green <- trade finalized
-                Yellow <- Any other notes
-
-
-    working on: 
-
-        * detect canceled trades from recent notifications
-        * finalize the trade if money has been sent - kind OK now .. 
-        * delete unnecessary derivations from serde structs
-        
-    * todo:
-        - btc.rs, get balance - panicks when conn refused .. handle this
-*/
-
 //#![allow(dead_code)]
 #![warn(unreachable_code)]
 pub mod btc;
@@ -53,9 +11,7 @@ use std::fs::File;
 use std::io::Read;
 use colored::Colorize;
 use crate::btc::Btc;
-//use std::io::{Error, ErrorKind};
 
-// config file stuff
 #[derive(Parser)]
 struct Cli {
     #[arg(long)]
@@ -176,7 +132,6 @@ fn load_conf(path: &String) -> Result<Cnf, std::io::Error> {
     let mut data = String::new();
     file.read_to_string(&mut data)?;
     
-    //return serde_json::from_str(&data).expect("Configuration not well formatted");
     let cnf = serde_json::from_str(&data).unwrap_or_else(|error| {
         panic!("Configuration not well formatted: \n{:?}", error)
     });
@@ -231,38 +186,6 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .default_headers(headers)
         .build()?;
     
-
-    // test codes
-    
-
-    //btc.get_balance(&"tb1q3mexmrd648jqzctuy7dhc57dcplywwe2cl76g7".to_string());
-    //let balance = btc.get_balance(&"tb1qjphhdmugekxclptt7x5gylerey7xrc8d762q6q".to_string());
-
-    //println!("{}", balance);
-    //if 1 == 1 { return Ok(()); }
-
-    
-    let address:String = "3Qc1HXSJf1Wy7X1e9Gt3SZs4iKQAJ7h3AK".to_owned();
-    let amount: String = "0.00004145".to_owned();
-    let expect = match amount.parse::<f64>() {
-        Ok(val) => {val},
-        Err(_) => return Ok(())
-    };
-        
-    match btc.assert_eq(&address, expect) {
-        Ok(v) => { println!("{}", v.to_string().green().bold()); },
-        Err(e) => println!("{}", e.to_string().red().bold())
-    }
-
-
-
-
-    if 1 == 1 { return Ok(()); }
-    
-
-
-    // end test
-
     loop { 
 
         // 

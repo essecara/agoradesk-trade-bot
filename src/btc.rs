@@ -98,7 +98,13 @@ impl Btc {
             .height;    
 
         // has balance AND has confirmations ?
-        if (current_height - usize::try_from(tx_height).unwrap() > 3) && balance.confirmed > 0 {
+        let confirmations = current_height - usize::try_from(tx_height)
+            .unwrap();
+        /*
+            @TODO: dirty fix as some transactions with many inputs && many outputs return huge confirmation
+            count even tho are new .. 
+        */
+        if (confirmations > 3 && confirmations <= 6) && balance.confirmed > 0 {
             return Ok(balance.confirmed);
         } 
         
@@ -111,15 +117,10 @@ impl Btc {
 
         let balance: u64 = self.get_balance(address)?;
 
-
-
-        let sat: f64 = 100000000.00;
+        let sat: f64 = 100000000f64;
         let expect_sats = expect * sat;
 
-        println!("balance: {}\n expect sats: {}", balance, expect * sat);
-        //println!("fn: assert_eq => {} == {}", balance, expect_sats as u64);
-
-        if balance >= expect_sats as u64{
+        if balance >= expect_sats as u64 {
             return Ok(true);
         }
 
