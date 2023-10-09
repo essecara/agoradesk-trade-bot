@@ -1,16 +1,11 @@
-//#![allow(dead_code)]
-#![warn(unreachable_code)]
-pub mod btc;
-
-use std::collections::HashMap;
+pub mod coins;
+use std::{collections::HashMap, fs::File, rc::Rc, io::Read, thread, time::Duration};
 use reqwest::blocking::Client;
 use serde::{Serialize, Deserialize};
-use std::{thread, time::Duration};
 use clap::Parser;
-use std::fs::File;
-use std::io::Read;
 use colored::Colorize;
-use crate::btc::Btc;
+use crate::coins::*;
+use crate::coins::Btc;
 
 #[derive(Parser)]
 struct Cli {
@@ -31,7 +26,8 @@ struct Cnf {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Ad {
-    id: String
+    id: String,
+    coin: String
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -78,53 +74,14 @@ struct Advertisement {
 
 struct Entry {
     data: Data,
-    bitcoin_addr: String,
-    addr_sent: bool
+    address: String,
+    addr_sent: bool,
+    coin: Rc<dyn Coin>
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Message {
     msg: String
-}
-
-fn finalize_trade(lm_client: &Client, trade_id: &String, password: &String) -> Result<(), ()> {
-
-    let mut url: String = "https://agoradesk.com/api/v1/contact_release/".to_owned();
-    url.push_str(&trade_id);
-
-    let mut map = HashMap::new();
-    map.insert("password", password);
-
-    let response = lm_client.request(reqwest::Method::POST, url)
-        .json(&map)
-        .send();
-
-    match response {
-        Ok(_) => { return Ok(()) },
-        Err(_) => { return Err(()) } 
-    };
-}
-
-
-fn send_btc_address(lm_client: &Client, address: &String, id: &String) {
-
-    let text: String = format!("Hello! This is an automatic BOT.
-
-- transfer BTC onchain to address at the bottom of this message
-- transfer must be same amount as shown in this offer / trade
-- this bot is in beta currently but don't worry, you are protected by arbitrage bond
-- if bot won't finalize automatically, I'll handle it manually
-
-{address}").to_owned();
-
-    let mut url: String = "https://agoradesk.com/api/v1/contact_message_post/".to_owned();
-    url.push_str(id);
-
-    let message: Message = Message { msg: text };
-    
-    let _response = lm_client.request( reqwest::Method::POST, url)
-        .json(&message)
-        .send(); 
 }
 
 fn load_conf(path: &String) -> Result<Cnf, std::io::Error> {
@@ -149,57 +106,68 @@ fn up_conf(path: &String, cnf: &Cnf) -> Result<(), std::io::Error> {
     };
 }
 
-fn remove_keys(hmap: &mut HashMap<String, Entry>, keys: &mut Vec<String>) {
-
-        let mut i = keys.iter();
-        
-        while let Some(value) = i.next() {
-            println!("fn: remove_keys => removing {}", value);
-            hmap.remove(value);
-        }
-
-        keys.clear();
+struct Engine {
+    password: String,
+    trades: HashMap<String, Entry>,
+    agoradesk: Client,
+    coins: HashMap<String, Rc<dyn Coin>>,
+    ads: Vec<Ad>
 }
 
-//#[tokio::main] @TODO
-fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
-
-    let args = Cli::parse();
-
-    let mut cnf: Cnf = load_conf(&args.conf)?;
-    let mut address_index = cnf.address_index;
+impl Engine {
     
-    let btc: Btc = btc::get_wallet(
-        cnf.mpk.clone(),
-        cnf.address_index, 
-        Some(cnf.testnet), 
-        cnf.electrum.clone()
-    )?;
+    fn new(config: &Cnf) -> Result<Engine, Box<dyn std::error::Error>> {
+        
+        let mut headers: reqwest::header::HeaderMap = reqwest::header::HeaderMap::new();
+        headers.insert("Authorization", config.apikey.parse()?);
+        headers.insert("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.".parse()?);
 
-    let mut trades_db: HashMap::<String,Entry> = HashMap::new();
-    
-    let mut headers: reqwest::header::HeaderMap = reqwest::header::HeaderMap::new();
-    headers.insert("Authorization", cnf.apikey.parse()?);
-    headers.insert("User-Agent", "PostmanRuntime/7.32.2".parse()?);
+        let http_client = reqwest::blocking::Client::builder()
+            .default_headers(headers)
+            .build()?;
 
-    let lm_client: Client = reqwest::blocking::Client::builder()
-        .default_headers(headers)
-        .build()?;
-    
-    loop { 
+        let mut coins: HashMap<String, Rc<dyn Coin>> = HashMap::new();
+        for ad in &config.ads {
+            match ad.coin.as_str() {
+                "btc" => {
+                    let btc = Btc::new(
+                        config.mpk.clone(),
+                        config.address_index,
+                        Some(config.testnet),
+                        config.electrum.clone()
+                    )?;
+                   
+                    let t: Rc<Btc> = Rc::new(btc);
+                    coins.insert("btc".to_owned(), t);
+                },
+                _ => panic!("Couldn't parse coin type for Ad. ")
+            }
+        }
 
-        // 
+        let engine: Engine = Engine { 
+            trades: HashMap::new(),
+            password: config.password.clone(),
+            agoradesk: http_client,
+            coins: coins,
+            ads: config.ads.clone()
+        };
+
+        Ok(engine)
+    }
+
+    fn fetch_trades(& mut self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+
+        let mut new_trades: Vec<String> = Vec::new();
         let url = "https://agoradesk.com/api/v1/dashboard/seller";
-        match lm_client.request(reqwest::Method::GET, url).send() {
 
+        match self.agoradesk.request(reqwest::Method::GET, url).send() {
             Ok(response) => 'success: {
-
                 if !(response.status().is_success()) {
                     println!("{}", "Failed to load open offers".to_owned().red().bold());
                     break 'success;
                 }
 
-                let text = response.text().unwrap();
+                let text = response.text()?;
                 let json: HashMap<String, Trades> = match serde_json::from_str(&text.as_str()) {
                     Result::Ok(j) => { j },
                     Result::Err(err) => {
@@ -207,115 +175,220 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                         break 'success;
                     }
                 };
-                
+                    
                 for t in &json["data"].contact_list {
 
                     let key = t.data.contact_id.clone();
                     let adid: &String = &t.data.advertisement.id;
 
-                    // check if the offer is interesting for us
-                    let index = cnf.ads.iter().position(|v| v.id == *adid); 
+                    let index = self.ads.iter().position(|v| v.id == *adid); 
                     if index.is_none() { continue; }
 
-                    match trades_db.get_mut(key.as_str()) {
-
+                    match self.trades.get_mut(key.as_str()) {
                         Some(e) => {
                             e.data = t.data.clone();
-                        },
+
+                            /* .. would send address here 
+                                but can't borrow self as immutable
+                                can't borrow mutable self as mutable...
+                             */
+                        }, 
                         _ => {
 
                             let mut entry: Entry;
-                            //let address_info = btc.get_address(Some(0));
-                            // address_index = address_info.unwrap().index;
+                            let coin_id = self.ads.get(index.unwrap()).unwrap().coin.as_str();              
+                            let address: String = match coin_id {
+                                "btc" => {
+                                    let btc = self.coins.get(coin_id)
+                                        .unwrap()
+                                        .as_any()
+                                        .downcast_ref::<Btc>()
+                                        .unwrap();
 
-
-                            match btc.get_address(Some(0)) {
-                                Ok(v) => {
-
-                                    address_index = v.index;
-                                    entry = Entry {
-                                        data: t.data.clone(),
-                                        bitcoin_addr: v.address.to_string(),
-                                        addr_sent: false 
-                                    };
-
-                                    send_btc_address(&lm_client, &entry.bitcoin_addr, &key);
-                                    entry.addr_sent = true;
-                                    trades_db.insert(key.clone(), entry);
-
-                                    println!("{}: {}", 
-                                        "New offer with ID".yellow(),
-                                        key.yellow().bold()
-                                    );
+                                    btc.get_address(Some(0))
+                                        .unwrap()
+                                        .address
+                                        .to_string()
                                 },
-
-                                Err(err) => {
+                                other => {
+                                    println!("{}: {}", 
+                                        "failed to get address for".red().bold(),
+                                        other.to_string().green().bold()
+                                    );
                                     continue;
                                 }
-                            }
+                            };
+
+                            let ptr_coin: Rc<dyn Coin> = self.coins.get(coin_id).unwrap().clone();
+                            entry = Entry {
+                                data: t.data.clone(),
+                                address: address,
+                                addr_sent: false,
+                                coin: ptr_coin
+                            };
+                            self.trades.insert(key.clone(), entry);
+                            new_trades.push(key.clone());
+
+                            println!("{}: {}", 
+                                "New offer with ID".yellow(),
+                                key.yellow().bold()
+                            );
                         }
                     }
-                }
-                
-                        
-                if address_index > cnf.address_index {
-
-                    cnf.address_index = address_index;
-
-                    match up_conf(&args.conf, &cnf) {
-                        Ok(_) => {
-                            println!("Update address index in config file");
-                        },
-                        Err(err) => {
-                            println!("Failed to update configuration with new address index\n{}", err);
-                        }
-                    };
-                }                
-            }
-
+                } 
+            }, 
             Err(e) => {
-                println!("{}", e.to_string().red().bold());
+                    println!("{}", e.to_string().red().bold());
             }
         }
-        
-        let mut remove_keys_vec: Vec<String> = Vec::new();
 
-        for key in trades_db.keys() {
+        return Ok(new_trades);
 
-            let tmp = trades_db.get(key).unwrap();
-            
-            let amount= tmp.data.amount.clone();
-            let _amount_xmr = tmp.data.amount.clone();
+    }
 
-            let address = &tmp.bitcoin_addr;
+    fn send_address(&self, id: &String, address: &String) -> Result<(), Box<dyn std::error::Error>> {
+        let text: String = format!("Hello! This is an automatic BOT.
+
+- transfer BTC onchain to address at the bottom of this message
+- transfer must be same amount as shown in this offer / trade
+- this bot is in beta currently but don't worry, you are protected by arbitrage bond
+- if bot won't finalize automatically, I'll handle it manually
+
+{address}").to_owned();
+
+        let mut url: String = "https://agoradesk.com/api/v1/contact_message_post/".to_owned();
+        url.push_str(id);
+
+        self.agoradesk.request(reqwest::Method::POST, url)
+            .json(&Message {msg: text})
+            .send()?;
+
+        Ok(())
+    }
+
+    fn monitor_trade_status(&self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+
+        let mut payed_trades: Vec<String> = Vec::new();
+
+        for key in self.trades.keys() {
+
+            let trade = self.trades.get(key).unwrap();
+            let amount = trade.data.amount.clone();
+            let address = &trade.address;
             let expect = match amount.parse::<f64>() {
                 Ok(val) => {val},
                 Err(_) => continue
             };
-                
-            let payed = btc.assert_eq(address, expect).unwrap_or(false);
-
-            //@TODO Watch out, this can't fail
-            if payed {
-
-                println!("{} {}",
-                    "Trade finalized ID:".green(),
-                    key.green().bold(),
-                );
-                
-                match finalize_trade(&lm_client, key, &cnf.password) {
-                    Ok(_) => {
-                        println!("removin offer from db");
-                        remove_keys_vec.push(key.clone());
-                    },
-                    Err(_) => { println!("Trade {} failed to finalize", key) }
-                }; 
-            } 
+             
+            let coin: Rc<dyn Coin> = trade.coin.clone();  
+            match coin.assert_eq(&address, expect) {
+                Ok(true) => {
+                    payed_trades.push(key.clone());
+                },
+                _ => continue
+            }
         }
 
-        remove_keys(&mut trades_db, &mut remove_keys_vec);
+        Ok(payed_trades)
+    }
 
-        thread::sleep(Duration::from_secs(60));
+    fn finalize_trade(&self, trade_id: &str) -> Result<(), Box<dyn std::error::Error>> {
+
+        let mut url: String = "https://agoradesk.com/api/v1/contact_release/".to_owned();
+        url.push_str(&trade_id);
+
+        let mut map = HashMap::new();
+        map.insert("password", &self.password);
+
+        self.agoradesk.post(url)
+            .json(&map)
+            .send()?;
+
+        Ok(())
+    }
+
+    fn remove_trade(& mut self, key: &String) {
+            self.trades.remove(key);
+    }
+
+}
+
+
+//#[tokio::main] @TODO
+fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+
+    let args = Cli::parse();
+    let mut cnf: Cnf = load_conf(&args.conf)?;
+    let mut engine: Engine = Engine::new(&cnf)?;
+
+    //let btc = engine.coins.get("btc").unwrap();
+    //println!("btc address index: {}", btc.get_address(Some(0)).unwrap().address);
+
+
+    println!("{}", "Configuration loadig, starting event loop".green().bold());
+
+
+    let btc: Btc = Btc::new(
+        "vpub5VRCxnBjHyAqbxcB1ioSxVX1jSyZV39P44EdsAHrCz6DET7HuYnkXTnfs7frcGKi5TTPLsiWYdga1DXcMLWX7C8mXNpnR8d1t7GURzX2vVM".to_string(),
+        11,
+        Some(true),
+        "tcp://testnet.aranguren.org:51001".to_string()
+    )?;
+
+
+    btc.assert_eq(&"tb1qrz3drs0ur4am05c7jks9dxt8p53ch7rrwwecyr".to_string(), 0.00006f64);
+
+
+    if 1 == 1 {
+        return Ok(());
+    }
+
+
+    loop {
+
+        let new_trades = match engine.fetch_trades() {
+            Ok(new_trades) => new_trades,
+            Err(_) => continue
+        };
+
+        for trade_id in new_trades {
+
+            let address = engine.trades.get(&trade_id)
+                .unwrap()
+                .address
+                .clone();
+    
+            match engine.send_address(&trade_id, &address) {
+                Ok(()) => {
+                    let trade = engine.trades.get_mut(&trade_id)
+                        .unwrap();
+                    trade.addr_sent = true;
+                },
+                Err(_) => {
+                    println!("{}: {}",
+                        "failed to send address for".red().bold(),
+                        trade_id
+                    );
+                }
+            }
+        }
+        
+        let payed_trades: Vec<String> = match engine.monitor_trade_status() {
+            Ok(trades) => trades,
+            Err(err) => {continue;}
+        };
+
+        for payed_trade in payed_trades {
+            match engine.finalize_trade(&payed_trade) {
+                Ok(_) => {
+                    engine.remove_trade(&payed_trade);
+                }
+                Err(err) => println!("{}: {}", "failed to finalize".red().bold(), payed_trade.green().bold())
+            };
+        }
+
+
+        thread::sleep(Duration::from_secs(30));
     }
 
     Ok(())
