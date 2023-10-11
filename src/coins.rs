@@ -134,9 +134,6 @@ impl Coin for Btc {
             count even tho are new .. 
         */
 
-        println!("confirmations: {}", confirmations);
-        println!("balance: {}", balance.confirmed);
-
         if (confirmations > 3 && confirmations <= 6) && balance.confirmed > 0 {
             return Ok(balance.confirmed);
         } 

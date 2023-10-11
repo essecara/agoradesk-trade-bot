@@ -1,3 +1,5 @@
+#![warn(dead_code)]
+
 pub mod coins;
 use std::{collections::HashMap, fs::File, rc::Rc, io::Read, thread, time::Duration};
 use reqwest::blocking::Client;
@@ -13,7 +15,7 @@ struct Cli {
     conf: String
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct Cnf {
     password: String,
     apikey: String,
@@ -24,24 +26,24 @@ struct Cnf {
     ads: Vec<Ad>
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 struct Ad {
     id: String,
     coin: String
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct Trades { 
     contact_list: Vec<Trade>,
     contact_count: u8,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct Trade {
     data: Data,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 struct Data {
     buyer: Buyer,
     amount: String,
@@ -57,7 +59,7 @@ struct Data {
     payment_completed_at: Option<String>
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 struct Buyer {
     username: String,
     feedback_score: u8,
@@ -65,7 +67,7 @@ struct Buyer {
     last_online: String,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 struct Advertisement {
     id: String,
     asset: String,
@@ -97,7 +99,6 @@ fn load_conf(path: &String) -> Result<Cnf, std::io::Error> {
 }
 
 fn up_conf(path: &String, cnf: &Cnf) -> Result<(), std::io::Error> {
-
     let mut file = std::fs::File::create(path)?;
 
     match serde_json::to_writer_pretty(&mut file, &cnf) {
@@ -106,18 +107,18 @@ fn up_conf(path: &String, cnf: &Cnf) -> Result<(), std::io::Error> {
     };
 }
 
-struct Engine {
-    password: String,
-    trades: HashMap<String, Entry>,
-    agoradesk: Client,
+struct Bot { 
     coins: HashMap<String, Rc<dyn Coin>>,
+    trades: HashMap<String, Entry>,
+    agoradesk: Client, 
+    password: String,
     ads: Vec<Ad>
 }
 
-impl Engine {
-    
-    fn new(config: &Cnf) -> Result<Engine, Box<dyn std::error::Error>> {
-        
+impl Bot { 
+
+    fn new(config: &Cnf) -> Result<Bot, Box<dyn std::error::Error>> {
+
         let mut headers: reqwest::header::HeaderMap = reqwest::header::HeaderMap::new();
         headers.insert("Authorization", config.apikey.parse()?);
         headers.insert("User-Agent", "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.".parse()?);
@@ -144,15 +145,13 @@ impl Engine {
             }
         }
 
-        let engine: Engine = Engine { 
+        Ok(Bot {
             trades: HashMap::new(),
             password: config.password.clone(),
             agoradesk: http_client,
             coins: coins,
             ads: config.ads.clone()
-        };
-
-        Ok(engine)
+        })
     }
 
     fn fetch_trades(& mut self) -> Result<Vec<String>, Box<dyn std::error::Error>> {
@@ -161,7 +160,9 @@ impl Engine {
         let url = "https://agoradesk.com/api/v1/dashboard/seller";
 
         match self.agoradesk.request(reqwest::Method::GET, url).send() {
+            
             Ok(response) => 'success: {
+
                 if !(response.status().is_success()) {
                     println!("{}", "Failed to load open offers".to_owned().red().bold());
                     break 'success;
@@ -170,7 +171,7 @@ impl Engine {
                 let text = response.text()?;
                 let json: HashMap<String, Trades> = match serde_json::from_str(&text.as_str()) {
                     Result::Ok(j) => { j },
-                    Result::Err(err) => {
+                    Result::Err(_) => {
                         println!("{}", "Failed to convert open offers to json".to_owned().red().bold());
                         break 'success;
                     }
@@ -195,7 +196,7 @@ impl Engine {
                         }, 
                         _ => {
 
-                            let mut entry: Entry;
+                            let entry: Entry;
                             let coin_id = self.ads.get(index.unwrap()).unwrap().coin.as_str();              
                             let address: String = match coin_id {
                                 "btc" => {
@@ -280,8 +281,7 @@ impl Engine {
                 Err(_) => continue
             };
              
-            let coin: Rc<dyn Coin> = trade.coin.clone();  
-            match coin.assert_eq(&address, expect) {
+            match trade.coin.clone().assert_eq(&address, expect) {
                 Ok(true) => {
                     payed_trades.push(key.clone());
                 },
@@ -315,52 +315,29 @@ impl Engine {
 
 
 //#[tokio::main] @TODO
-fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
+fn main() {
 
     let args = Cli::parse();
-    let mut cnf: Cnf = load_conf(&args.conf)?;
-    let mut engine: Engine = Engine::new(&cnf)?;
-
-    //let btc = engine.coins.get("btc").unwrap();
-    //println!("btc address index: {}", btc.get_address(Some(0)).unwrap().address);
-
-
-    println!("{}", "Configuration loadig, starting event loop".green().bold());
-
-
-    let btc: Btc = Btc::new(
-        "vpub5VRCxnBjHyAqbxcB1ioSxVX1jSyZV39P44EdsAHrCz6DET7HuYnkXTnfs7frcGKi5TTPLsiWYdga1DXcMLWX7C8mXNpnR8d1t7GURzX2vVM".to_string(),
-        11,
-        Some(true),
-        "tcp://testnet.aranguren.org:51001".to_string()
-    )?;
-
-
-    btc.assert_eq(&"tb1qrz3drs0ur4am05c7jks9dxt8p53ch7rrwwecyr".to_string(), 0.00006f64);
-
-
-    if 1 == 1 {
-        return Ok(());
-    }
-
+    let cnf: Cnf = load_conf(&args.conf).unwrap();
+    let mut bot: Bot = Bot::new(&cnf).unwrap();
 
     loop {
 
-        let new_trades = match engine.fetch_trades() {
+        let new_trades = match bot.fetch_trades() {
             Ok(new_trades) => new_trades,
             Err(_) => continue
         };
 
         for trade_id in new_trades {
 
-            let address = engine.trades.get(&trade_id)
+            let address = bot.trades.get(&trade_id)
                 .unwrap()
                 .address
                 .clone();
     
-            match engine.send_address(&trade_id, &address) {
+            match bot.send_address(&trade_id, &address) {
                 Ok(()) => {
-                    let trade = engine.trades.get_mut(&trade_id)
+                    let trade = bot.trades.get_mut(&trade_id)
                         .unwrap();
                     trade.addr_sent = true;
                 },
@@ -372,24 +349,26 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
-        
-        let payed_trades: Vec<String> = match engine.monitor_trade_status() {
+
+        let payed_trades: Vec<String> = match bot.monitor_trade_status() {
             Ok(trades) => trades,
-            Err(err) => {continue;}
+            Err(err) => {
+                println!("{}", err.to_string().red().bold());
+                continue;
+            }
         };
 
         for payed_trade in payed_trades {
-            match engine.finalize_trade(&payed_trade) {
+            match bot.finalize_trade(&payed_trade) {
                 Ok(_) => {
-                    engine.remove_trade(&payed_trade);
+                    println!("{}: {}", "Trade finalized".green().bold(), &payed_trade);
+                    bot.remove_trade(&payed_trade);
                 }
-                Err(err) => println!("{}: {}", "failed to finalize".red().bold(), payed_trade.green().bold())
+                Err(_) => println!("{}: {}", "failed to finalize".red().bold(), payed_trade.green().bold())
             };
         }
 
-
-        thread::sleep(Duration::from_secs(30));
+        thread::sleep(Duration::from_secs(60));
     }
 
-    Ok(())
 }
